@@ -43,6 +43,19 @@ PROJECT = Path(os.environ.get("HYBRID_PROJECT_DIR", Path(__file__).resolve().par
         ),
         "run_dbt_tests": Param(True, type="boolean", title="Run post-publication dbt tests"),
     },
+    doc_md="""
+    # Hybrid transaction pipeline
+
+    `tenant_ids` controls the tenant scope for the complete DAG run:
+
+    - `[]` processes all tenants (the scheduled-run default).
+    - `["tenant-a"]` processes one tenant.
+    - `["tenant-a", "tenant-b"]` processes a subset.
+
+    The same validated selection scopes Trino reads and Delta transaction replacement, so a
+    selected-tenant retry cannot replace another tenant's partitions. Up to 400 IDs are accepted.
+    See `docs/tenant-parameters.md` in the repository for the complete operational guidance.
+    """,
     tags=["trino", "delta", "scd2", "dbt"],
 )
 def hybrid_transactions():

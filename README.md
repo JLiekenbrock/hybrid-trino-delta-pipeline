@@ -336,6 +336,9 @@ and the Delta `replaceWhere` predicate. A tenant-specific retry therefore cannot
 tenant's transaction partitions. Customer/account SCD2 merges are naturally key-scoped and their
 source and current-target scans receive the same tenant filter.
 
+See [`docs/tenant-parameters.md`](docs/tenant-parameters.md) for trigger examples, validation
+rules, scoped-retry guarantees, command-line usage and performance guidance.
+
 The TPCH profile is in `sql/profiles/tpch/`. Production remains in `sql/`; set
 `TRINO_SQL_PROFILE=production` and the values from `.env.example` to use it.
 
