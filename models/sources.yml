@@ -1,0 +1,34 @@
+version: 2
+
+sources:
+  - name: trino_tpch
+    description: Read-only Trino TPCH inputs used by the local hybrid pipeline demo.
+    database: tpch
+    schema: tiny
+    meta:
+      execution_engine: trino
+      access: read_only
+      dbt_adapter: duckdb
+      lineage_role: external_source
+    tables:
+      - name: customer
+        description: Customer source for the customer SCD2 dataset.
+        columns:
+          - name: custkey
+            description: TPCH customer key.
+          - name: mktsegment
+            description: Customer market segment.
+      - name: orders
+        description: Account-shaped source and transaction-to-customer relationship.
+        columns:
+          - name: orderkey
+            description: TPCH order key, used as the demo account key.
+          - name: custkey
+            description: Owning customer key.
+      - name: lineitem
+        description: Transaction-shaped TPCH line items.
+        columns:
+          - name: orderkey
+            description: Parent order/account key.
+          - name: linenumber
+            description: Line number within the order.

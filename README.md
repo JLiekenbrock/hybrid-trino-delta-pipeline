@@ -5,6 +5,23 @@ cannot write. Trino performs all large joins, filtering, change detection and ty
 Python streams the final result through a fixed Arrow schema into delta-rs, which owns Delta
 transactions on a writable S3 prefix.
 
+## Project setup at a glance
+
+| Component | Responsibility |
+| --- | --- |
+| Trino | Read-only source access and pushdown of joins, filters, deduplication, change detection and casts |
+| PyArrow | Bounded streaming transport with explicit schemas; no whole-result DataFrame is required |
+| delta-rs | Transactional S3 writes, SCD2 `MERGE` operations and partition-scoped transaction replacement |
+| Delta Lake on S3 | Durable handoff between independently retryable customer, account and transaction tasks |
+| Airflow | Orders the three tasks, supplies the logical date and provides retry/observability boundaries |
+| DuckDB + dbt | Reads the published Delta tables for contracts, tests, documentation and dataset lineage; it is not on the ingestion hot path |
+| KubernetesExecutor (production) | Runs each Airflow task in a separate pod while Delta provides the cross-pod handoff |
+
+The local demonstration supplies the same shape without external infrastructure: Trino's TPCH
+connector is the read-only source, MinIO provides S3-compatible storage, and Airflow runs the
+pipeline. Production replaces those endpoints through environment variables and the production
+SQL profile; the execution design remains the same.
+
 ## Runtime graph
 
 ```text
@@ -52,12 +69,27 @@ The bootstrap query is selected automatically when a customer/account Delta tabl
 exist. Replace the example `analytics.*` and `published.*` relations with your Trino relations.
 Trino must be able to read the published Delta tables before the downstream task starts.
 
-## dbt's role
+## dbt lineage, tests and documentation
 
-dbt is not invoked by Airflow tasks. The Docker image runs `dbt parse` at build time to validate
-the published-table lineage. The dbt models scan the three committed Delta tables and provide
-documentation plus post-publication tests for null keys, transaction uniqueness, exactly one
-current SCD2 version and non-overlapping validity windows.
+dbt is deliberately outside the ingestion hot path. The Docker image runs `dbt parse` at build
+time, while an explicit documentation/test command scans the three committed Delta tables with
+DuckDB. Trino inputs are declared as read-only dbt `source()` nodes; `ref()` dependencies connect
+the published customer, account and transaction models. Their metadata records Trino as the
+source query engine, delta-rs as the writer, DuckDB as the dbt adapter, Delta/S3 as storage and
+Airflow as the orchestrator.
+
+This produces dataset lineage rather than pretending that execution engines are datasets:
+
+```text
+Trino customer ------------------------> customer Delta
+Trino orders ----+---------------------> account Delta
+customer Delta --+                           |
+Trino lineitem --+---------------------------+--> transactions Delta
+Trino orders ----+
+```
+
+The dbt tests cover null keys, transaction uniqueness, exactly one current SCD2 version and
+non-overlapping validity windows.
 
 Run those tests separately after publication when desired:
 
@@ -65,7 +97,7 @@ Run those tests separately after publication when desired:
 dbt build --project-dir . --profiles-dir . --vars "output_uri: 's3://bucket/prefix'"
 ```
 
-Critical transport/schema checks remain inline in the writer, so dbt is not on the hot path.
+Critical transport and schema checks remain inline in the writer.
 
 ## Configure and run
 
@@ -111,3 +143,16 @@ Trigger the paused DAG for any date. Customer and account are stable SCD2 snapsh
 are idempotent; lineitem is transactionally replaced in the triggered `business_date` partition.
 The TPCH profile is in `sql/profiles/tpch/`. Production remains in `sql/`; set
 `TRINO_SQL_PROFILE=production` and the values from `.env.example` to use it.
+## Generate dbt documentation
+
+Generate a reproducible dbt catalog and lineage graph against the local Delta
+tables:
+
+```powershell
+.\dbt-docs.ps1
+```
+
+Open `target/index.html` after the command finishes. The graph models the Trino
+tables as read-only dbt sources and the Delta datasets as dbt models. Node
+metadata records the actual engine roles: Trino reads, delta-rs writes, DuckDB
+exposes/tests the Delta outputs, and Airflow orchestrates the tasks.

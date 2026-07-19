@@ -3,6 +3,13 @@ version: 2
 models:
   - name: customer
     description: Customer SCD2 Delta table published by the customer Airflow task.
+    meta:
+      source_query_engine: trino
+      write_engine: delta-rs
+      dbt_adapter: duckdb
+      storage: s3
+      storage_format: delta
+      orchestration: airflow
     columns:
       - name: customer_id
         data_tests: [not_null]
@@ -14,6 +21,14 @@ models:
         data_tests: [not_null]
   - name: account
     description: Account SCD2 Delta table published after customer.
+    meta:
+      source_query_engine: trino
+      upstream_read_engine: duckdb
+      write_engine: delta-rs
+      dbt_adapter: duckdb
+      storage: s3
+      storage_format: delta
+      orchestration: airflow
     columns:
       - name: account_id
         data_tests: [not_null]
@@ -23,6 +38,14 @@ models:
         data_tests: [not_null]
   - name: transactions
     description: Immutable transaction facts replaced idempotently by business-date partition.
+    meta:
+      source_query_engine: trino
+      upstream_read_engine: duckdb
+      write_engine: delta-rs
+      dbt_adapter: duckdb
+      storage: s3
+      storage_format: delta
+      orchestration: airflow
     columns:
       - name: transaction_id
         data_tests: [not_null, unique]

@@ -69,6 +69,10 @@ services:
       AWS_ALLOW_HTTP: ${AWS_ALLOW_HTTP:-true}
       AWS_FORCE_PATH_STYLE: ${AWS_FORCE_PATH_STYLE:-true}
       DELTA_TARGET_FILE_SIZE: ${DELTA_TARGET_FILE_SIZE:-536870912}
+      DBT_DUCKDB_PATH: /opt/airflow/dbt-docs.duckdb
+      DBT_S3_ENDPOINT: ${DBT_S3_ENDPOINT:-minio:9000}
+      DBT_S3_USE_SSL: ${DBT_S3_USE_SSL:-false}
+      DBT_S3_URL_STYLE: ${DBT_S3_URL_STYLE:-path}
     volumes:
       - ./airflow/dags:/opt/airflow/dags:ro
       - ./:/opt/project

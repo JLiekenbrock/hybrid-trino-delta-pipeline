@@ -3,9 +3,18 @@ hybrid_trino_duckdb:
   outputs:
     dev:
       type: duckdb
-      path: ":memory:"
+      path: "{{ env_var('DBT_DUCKDB_PATH', ':memory:') }}"
       threads: "{{ env_var('DUCKDB_THREADS', '8') | int }}"
       extensions: [httpfs, parquet, delta]
+      secrets:
+        - type: s3
+          provider: config
+          key_id: "{{ env_var('AWS_ACCESS_KEY_ID', 'minioadmin') }}"
+          secret: "{{ env_var('AWS_SECRET_ACCESS_KEY', 'minioadmin') }}"
+          region: "{{ env_var('AWS_REGION', 'us-east-1') }}"
+          endpoint: "{{ env_var('DBT_S3_ENDPOINT', 'minio:9000') }}"
+          use_ssl: "{{ env_var('DBT_S3_USE_SSL', 'false') }}"
+          url_style: "{{ env_var('DBT_S3_URL_STYLE', 'path') }}"
       settings:
         memory_limit: "{{ env_var('DUCKDB_MEMORY_LIMIT', '8GB') }}"
         temp_directory: "{{ env_var('DUCKDB_TEMP_DIRECTORY', 'data/tmp') }}"
