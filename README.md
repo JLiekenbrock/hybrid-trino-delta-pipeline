@@ -15,7 +15,46 @@ transactions on a writable S3 prefix.
 | Delta Lake on S3 | Durable handoff between independently retryable customer, account and transaction tasks |
 | Airflow | Orders the three tasks, supplies the logical date and provides retry/observability boundaries |
 | DuckDB + dbt | Reads the published Delta tables for contracts, tests, documentation and dataset lineage; it is not on the ingestion hot path |
-| KubernetesExecutor (production) | Runs each Airflow task in a separate pod while Delta provides the cross-pod handoff |
+| KubernetesPodOperator (production) | Runs only the ETL stages in the shared pipeline image while unrelated Airflow tasks retain their normal runtime |
+
+## Why these technologies
+
+- **Trino** is the source query engine because it is the only common access layer for all foreign
+  inputs. It executes the expensive joins, filtering, deduplication and projection close to the
+  sources, so only the reduced final result crosses the network. It is intentionally read-only in
+  this design because the available Trino identity cannot write.
+- **Python** provides a small control layer around the Trino cursor, schema enforcement and Delta
+  transaction APIs. It avoids implementing orchestration or data processing logic in shell code.
+- **PyArrow** is the transport because Trino results can be converted in bounded batches with an
+  explicit schema. This avoids loading an entire result into a pandas or Polars DataFrame and
+  preserves decimals, timestamps and nullability across the engine boundary.
+- **delta-rs** is the writer because it can commit Delta transactions directly to the writable S3
+  prefix without requiring Trino write permissions or a Spark cluster. It supports the SCD2 merge
+  and partition-scoped overwrite behavior required here.
+- **Delta Lake on S3** is both the table format and durable handoff. Its transaction log makes
+  retries atomic and gives downstream tasks a committed snapshot, while S3 remains accessible
+  across short-lived Kubernetes pods. Plain Parquet alone would not provide transactional merge,
+  replacement or snapshot semantics.
+- **Airflow** supplies scheduling, logical dates, typed run parameters, retries and operational
+  visibility. Customer, account and transactions remain separate tasks because each published
+  Delta table is a useful retry and observability boundary.
+- **KubernetesPodOperator** is used for production ETL stages so they can share one purpose-built
+  pipeline image without forcing unrelated Airflow tasks to use that image. The Stackable Airflow
+  control-plane and normal executor images remain separate.
+- **DuckDB** directly scans the published Delta/S3 data for fast local validation and analytical
+  SQL. It stays outside the ingestion hot path because the result reduction depends on joins that
+  Trino should perform before transferring data.
+- **dbt** documents dataset lineage and runs post-publication tests using DuckDB. It is not used as
+  the hybrid execution orchestrator because one dbt invocation has one adapter and the actual job
+  spans Trino reads, Arrow transport and delta-rs writes.
+- **MinIO and TPCH** make the architecture runnable locally without AWS credentials or production
+  source access. They are development substitutes for S3 and foreign Trino catalogs, not required
+  production components.
+
+**Polars is not required** because this pipeline does not need an in-memory DataFrame layer after
+Trino has completed the transformations. **Redis is not a data handoff or cache**: Delta on S3 is
+durable and transactional. Redis is needed only if the chosen Airflow deployment uses
+CeleryExecutor as its task queue.
 
 The local demonstration supplies the same shape without external infrastructure: Trino's TPCH
 connector is the read-only source, MinIO provides S3-compatible storage, and Airflow runs the
@@ -36,8 +75,8 @@ customer (Trino -> Arrow -> Delta SCD2 MERGE)
         -> transactions (Trino -> Arrow -> Delta replaceWhere)
 ```
 
-Each Airflow task is a separate retry and KubernetesExecutor pod boundary. The Delta tables
-are durable handoffs, and Trino reads their latest committed snapshots. DAG runs are serialized
+Each Airflow stage is a separate retry and, in production, KubernetesPodOperator pod boundary.
+The Delta tables are durable handoffs, and Trino reads their latest committed snapshots. DAG runs are serialized
 (`max_active_runs=1`) so daily SCD2 changes cannot commit out of effective-date order. Automatic
 catch-up is disabled; trigger historical dates deliberately in ascending order.
 
