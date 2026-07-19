@@ -1,7 +1,8 @@
 {
-  "business_key": "account_id",
-  "partition_by": ["entity_bucket"],
+  "business_key": ["tenant_id", "account_id"],
+  "partition_by": ["tenant_id"],
   "fields": [
+    {"name": "tenant_id", "type": "string", "nullable": false},
     {"name": "account_id", "type": "string", "nullable": false},
     {"name": "customer_id", "type": "string", "nullable": false},
     {"name": "account_type", "type": "string", "nullable": true},
@@ -13,6 +14,7 @@
   ],
   "source_fields": [
     {"name": "merge_key", "type": "string", "nullable": true},
+    {"name": "tenant_id", "type": "string", "nullable": false},
     {"name": "account_id", "type": "string", "nullable": false},
     {"name": "customer_id", "type": "string", "nullable": false},
     {"name": "account_type", "type": "string", "nullable": true},

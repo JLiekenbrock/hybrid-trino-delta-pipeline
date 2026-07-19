@@ -1,5 +1,6 @@
 -- Transactions are immutable facts. One business_date partition is replaced on retry.
 select
+    cast(t.tenant_id as varchar) as tenant_id,
     cast(t.transaction_id as varchar) as transaction_id,
     cast(t.account_id as varchar) as account_id,
     a.customer_id,
@@ -9,10 +10,12 @@ select
     cast(t.currency as varchar) as currency
 from analytics.transactions t
 inner join published.account a
-    on cast(t.account_id as varchar) = a.account_id
+    on cast(t.tenant_id as varchar) = a.tenant_id
+   and cast(t.account_id as varchar) = a.account_id
    and a.is_current = true
 inner join published.customer c
-    on a.customer_id = c.customer_id
+    on a.tenant_id = c.tenant_id
+   and a.customer_id = c.customer_id
    and c.is_current = true
 where t.transaction_ts >= timestamp '{start_ts}'
   and t.transaction_ts < timestamp '{end_ts}'

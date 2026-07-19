@@ -1,7 +1,8 @@
 {
-  "business_key": "transaction_id",
-  "partition_by": ["business_date"],
+  "business_key": ["tenant_id", "transaction_id"],
+  "partition_by": ["tenant_id", "business_date"],
   "fields": [
+    {"name": "tenant_id", "type": "string", "nullable": false},
     {"name": "transaction_id", "type": "string", "nullable": false},
     {"name": "account_id", "type": "string", "nullable": false},
     {"name": "customer_id", "type": "string", "nullable": false},

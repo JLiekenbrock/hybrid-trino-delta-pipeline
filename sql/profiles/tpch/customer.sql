@@ -1,6 +1,7 @@
 -- Local demo: TPCH customer is emitted as a stable SCD2 snapshot.
 select
     cast(null as varchar) as merge_key,
+    cast('tpch' as varchar) as tenant_id,
     cast(custkey as varchar) as customer_id,
     cast(mktsegment as varchar) as customer_segment,
     timestamp '{start_ts}' as valid_from,

@@ -151,6 +151,19 @@ def open_table(uri: str) -> DeltaTable | None:
         return None
 
 
+def initialize_empty_table(uri: str, contract: Contract) -> DeltaTable:
+    """Create version 0 so every data commit has a rollback target."""
+    empty = pa.RecordBatchReader.from_batches(contract.target_schema, [])
+    write_deltalake(
+        uri,
+        empty,
+        mode="error",
+        partition_by=contract.partition_by,
+        storage_options=storage_options(),
+    )
+    return DeltaTable(uri, storage_options=storage_options())
+
+
 def target_only_reader(reader: pa.RecordBatchReader, contract: Contract) -> pa.RecordBatchReader:
     names = contract.target_schema.names
 
@@ -185,12 +198,13 @@ def write_scd2(stage: str, uri: str, reader: pa.RecordBatchReader, contract: Con
         )
         return {"operation": "create"}
 
-    key = contract.business_key
+    tenant_key, key = contract.business_keys
     insert_values = {name: f"source.{name}" for name in contract.target_schema.names}
     metrics = (
         table.merge(
             source=reader,
             predicate=(
+                f"target.{tenant_key} = source.{tenant_key} AND "
                 "target.entity_bucket = source.entity_bucket AND target.is_current = true AND ("
                 f"(target.{key} = source.merge_key AND target.attribute_hash <> source.attribute_hash) OR "
                 f"(source.merge_key IS NULL AND target.{key} = source.{key} "
@@ -248,6 +262,7 @@ def main() -> None:
     parser.add_argument("--query-params", type=json.loads, default={})
     parser.add_argument("--window", choices=("daily", "weekly", "monthly"), default="daily")
     parser.add_argument("--print-query", action="store_true")
+    parser.add_argument("--xcom-output", type=Path)
     args = parser.parse_args()
     if not isinstance(args.query_params, dict):
         parser.error("--query-params must be a JSON object")
@@ -266,7 +281,10 @@ def main() -> None:
     started = time.perf_counter()
     uri = f"{args.output_uri.rstrip('/')}/{args.stage}"
     contract = load_contract(ROOT / "contracts" / f"{args.stage}.json")
-    bootstrap = args.stage in SCD2_STAGES and open_table(uri) is None
+    existing_table = open_table(uri)
+    bootstrap = args.stage in SCD2_STAGES and existing_table is None
+    table_before_write = existing_table or initialize_empty_table(uri, contract)
+    previous_version = table_before_write.version()
     reader = arrow_stream(
         render_query(
             args.stage, args.date, args.query_params, bootstrap=bootstrap, window=args.window
@@ -278,15 +296,23 @@ def main() -> None:
         metrics = write_scd2(args.stage, uri, reader, contract)
     else:
         metrics = write_transactions(uri, window_start, window_end, reader, contract)
-    print(json.dumps({
+    committed_version = DeltaTable(uri, storage_options=storage_options()).version()
+    result = {
         "business_date": args.date.isoformat(),
         "window": args.window,
         "window_start": window_start.isoformat(),
         "window_end_exclusive": window_end.isoformat(),
         "stage": args.stage,
         "delta_uri": uri, "total_seconds": round(time.perf_counter() - started, 3),
+        "previous_version": previous_version,
+        "committed_version": committed_version,
         "metrics": metrics,
-    }, indent=2, default=str))
+    }
+    rendered_result = json.dumps(result, indent=2, default=str)
+    print(rendered_result)
+    if args.xcom_output:
+        args.xcom_output.parent.mkdir(parents=True, exist_ok=True)
+        args.xcom_output.write_text(json.dumps(result, default=str), encoding="utf-8")
 
 
 if __name__ == "__main__":

@@ -1,5 +1,6 @@
 -- Local demo: TPCH lineitem represents immutable transaction facts.
 select
+    cast('tpch' as varchar) as tenant_id,
     concat(cast(l.orderkey as varchar), '-', cast(l.linenumber as varchar)) as transaction_id,
     cast(l.orderkey as varchar) as account_id,
     cast(o.custkey as varchar) as customer_id,

@@ -12,6 +12,7 @@ Use these separate images instead:
 | --- | --- | --- |
 | Stackable Airflow image | Airflow and the Kubernetes provider | Webserver, scheduler, DAG processor and ordinary executor tasks |
 | `hybrid-pipeline` image | Trino client, PyArrow, delta-rs, SQL and contracts; no Airflow | Only customer, account and transaction KubernetesPodOperator pods |
+| `hybrid-validation` image | dbt-duckdb, models and data tests | Model-scoped validation pod after each ETL stage |
 
 This allows a single Airflow installation to run unrelated Python, sensor,
 notification and orchestration tasks without loading the ETL dependencies.
@@ -23,6 +24,8 @@ image.
 ```shell
 docker build -f Dockerfile.pipeline -t registry.example.com/data/hybrid-pipeline:1.0.0 .
 docker push registry.example.com/data/hybrid-pipeline:1.0.0
+docker build -f Dockerfile.validation -t registry.example.com/data/hybrid-validation:1.0.0 .
+docker push registry.example.com/data/hybrid-validation:1.0.0
 ```
 
 Use immutable version tags or image digests in production. Do not use `latest`.
@@ -51,7 +54,8 @@ and select the resulting Stackable-compatible image through
 
 1. Copy `airflow/examples/hybrid_transactions_kpo.py` into the DAG repository
    mounted or synchronized by Stackable Airflow.
-2. Set `HYBRID_PIPELINE_IMAGE` and optionally `HYBRID_PIPELINE_NAMESPACE` on the
+2. Set `HYBRID_PIPELINE_IMAGE`, `HYBRID_VALIDATION_IMAGE` and optionally
+   `HYBRID_PIPELINE_NAMESPACE` on the
    Airflow components that parse and execute DAGs.
 3. Update the RoleBinding subject in `kubernetes/rbac.yaml` to the ServiceAccount
    used by Stackable Airflow, then apply it.
@@ -65,9 +69,14 @@ kubectl apply -f kubernetes/rbac.yaml
 kubectl apply -f path/to/encrypted-hybrid-pipeline-secret.yaml
 ```
 
-The three pods exchange no data through XCom. Customer and account SCD2 tables
+The ETL and validation pods exchange no dataset rows through XCom. Customer and account SCD2 tables
 and date-partitioned transactions are committed to Delta on S3, which remains
 the durable task boundary.
+
+They exchange only a small JSON control message containing Delta table URI and pre/post-write
+versions. A failed validation pod restores the prior version only when the table is still at the
+expected post-write version. This optimistic-concurrency check prevents rollback from overwriting
+a newer commit. No dataset rows or Arrow batches pass through XCom.
 
 ## Unrelated tasks
 

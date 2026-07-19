@@ -1,6 +1,7 @@
 -- Local demo: TPCH orders represent accounts owned by TPCH customers.
 select
     cast(null as varchar) as merge_key,
+    cast('tpch' as varchar) as tenant_id,
     cast(o.orderkey as varchar) as account_id,
     cast(o.custkey as varchar) as customer_id,
     cast(o.orderstatus as varchar) as account_type,

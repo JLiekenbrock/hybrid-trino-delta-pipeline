@@ -16,8 +16,8 @@ fi
 docker compose up -d airflow
 docker compose exec -T airflow dbt build \
     --project-dir /opt/project --profiles-dir /opt/project \
-    --vars "{output_uri: 's3://hybrid/delta'}"
+    --vars "{output_uri: 's3://hybrid/delta-multitenant'}"
 docker compose exec -T airflow dbt docs generate \
     --project-dir /opt/project --profiles-dir /opt/project \
-    --vars "{output_uri: 's3://hybrid/delta'}"
+    --vars "{output_uri: 's3://hybrid/delta-multitenant'}"
 echo "dbt documentation generated at target/index.html"

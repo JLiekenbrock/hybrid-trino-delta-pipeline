@@ -70,9 +70,9 @@ examples.
 ## Runtime graph
 
 ```text
-customer (Trino -> Arrow -> Delta SCD2 MERGE)
-    -> account (Trino -> Arrow -> Delta SCD2 MERGE)
-        -> transactions (Trino -> Arrow -> Delta replaceWhere)
+customer write -> customer dbt tests
+    -> account write -> account dbt tests
+        -> transactions write -> transaction dbt tests
 ```
 
 Each Airflow stage is a separate retry and, in production, KubernetesPodOperator pod boundary.
@@ -82,16 +82,65 @@ catch-up is disabled; trigger historical dates deliberately in ascending order.
 
 ## Publishing behavior
 
-- `customer`: SCD2, partitioned into 256 stable `entity_bucket` values.
-- `account`: SCD2, partitioned into 256 stable `entity_bucket` values.
-- `transactions`: immutable facts, partitioned by `business_date`; a retry transactionally
-  replaces only that date using Delta `replaceWhere`.
+- `customer`: tenant-aware SCD2, physically partitioned by `tenant_id`.
+- `account`: tenant-aware SCD2, physically partitioned by `tenant_id`.
+- `transactions`: immutable facts, partitioned by `tenant_id, business_date`; a retry
+  transactionally replaces the selected date window using Delta `replaceWhere`.
 
 Customer and account SQL emit staged SCD2 input. Changed existing keys produce one row with
 `merge_key=<business key>` to close the current version plus one row with `merge_key=NULL` to
 insert the replacement. New keys produce only the insert row. delta-rs applies both actions in
 one `MERGE` commit. The supplied SQL keeps the latest source state per key in each daily window;
 adapt it if every intraday version must be retained.
+
+## Multi-tenant execution decision
+
+The production design processes all tenants in one Trino query and one Delta commit per dataset
+stage. There are at most roughly 400 tenants, they share credentials and catalogs, and Trino can
+parallelize their source partitions across its workers. This avoids hundreds of Kubernetes pod
+starts, small commits and concurrent Delta-log conflicts. It also keeps the version-checked
+rollback safe because only one writer owns a table during a stage.
+
+`tenant_id` is mandatory throughout the Arrow and Delta contracts. Keys are composite:
+
+```text
+customer:    (tenant_id, customer_id)
+account:     (tenant_id, account_id)
+transaction: (tenant_id, transaction_id)
+```
+
+Every source deduplication, customer/account/transaction join, SCD2 merge predicate and dbt test
+uses that tenant boundary. The TPCH demonstration supplies the constant tenant `tpch`.
+
+Customer and account are physically partitioned by `tenant_id`; transactions use
+`tenant_id, business_date`. The stable `entity_bucket` remains a column used in SCD2 merge
+predicates, but is not also a physical partition. Combining 400 tenant partitions with 256 bucket
+partitions could produce 102,400 sparse dimension partitions and excessive small files.
+
+Tenant sizes may be highly skewed. Start with the single all-tenant stage and use Trino query
+metrics to identify genuine outliers. If later needed, isolate only the largest tenants or create
+size-balanced tenant batches. Do not let parallel batches commit independently to the same Delta
+table while table-version rollback is enabled; use separate table locations or a single
+consolidating writer for that design.
+
+A large tenant partition is not inherently a problem: delta-rs writes multiple target-sized
+Parquet files inside it. Optimize for file sizes, pruning and observed query patterns rather than
+trying to make every tenant partition equally large. If a dimension partition becomes too large
+for acceptable SCD2 merge performance, introduce adaptive `tenant_shard` as a second partition
+column using a governed tenant-size table:
+
+```text
+small tenant  -> shard_count 1
+medium tenant -> shard_count 8
+large tenant  -> shard_count 32 or 64
+tenant_shard  = hash(composite business key) % shard_count
+```
+
+Small tenants then retain one partition while only measured outliers fan out. The shard count must
+be stable for existing records or changed through a deliberate table rewrite. Avoid using all 256
+`entity_bucket` values as physical partitions for every tenant. For transactions, add a shard only
+when a single `tenant_id, business_date` partition is demonstrably too large; multiple Parquet files
+inside that partition are normally sufficient.
 
 ## Schema contracts
 
@@ -134,7 +183,30 @@ Trino orders ----+
 ```
 
 The dbt tests cover null keys, transaction uniqueness, exactly one current SCD2 version and
-non-overlapping validity windows.
+non-overlapping validity windows. Airflow runs model-scoped tests immediately after each atomic
+Delta write. A failure marks the DAG run failed and prevents the next dataset from being built.
+Disable these tasks for an exceptional run with the typed `run_dbt_tests` trigger parameter.
+
+### Failed-test rollback decision
+
+Every table is initialized with an empty Delta version 0 before its first data commit. Each ETL
+task returns only small version metadata through XCom: the previous version, its committed version
+and the table URI. If the immediately following dbt task fails, it checks that the table is still
+at exactly that committed version and then uses Delta `RESTORE` to create a compensating commit
+whose snapshot matches the previous version. The validation task still fails, so the next dataset
+does not run.
+
+Rollback is intentionally refused when the current version differs from the failed job's committed
+version. This optimistic-concurrency guard prevents the cleanup task from erasing a newer external
+writer's commit. `max_active_runs=1` serializes this DAG, but production should also ensure that
+other writers coordinate ownership of these tables. Delta history retains both the rejected commit
+and the compensating restore for auditability until normal retention and vacuum policies remove old
+files.
+
+This is a performance-oriented alternative to Write-Audit-Publish (WAP): it avoids copying a
+candidate table from S3 to S3, but a bad snapshot can be visible briefly between commit and restore.
+Use candidate locations plus a metadata-only catalog/pointer swap when absolutely no unvalidated
+snapshot may ever be visible to readers.
 
 Run those tests separately after publication when desired:
 
@@ -199,7 +271,9 @@ The local stack includes:
 - MinIO console at <http://localhost:9001> (`minioadmin` / `minioadmin`)
 
 The default demo maps TPCH `customer -> orders -> lineitem` onto the three pipeline stages,
-uses the `tiny` schema, and publishes Delta tables under `s3://hybrid/delta` in MinIO. Start it:
+uses the `tiny` schema, and publishes tenant-aware Delta tables under
+`s3://hybrid/delta-multitenant` in MinIO. The prior single-tenant demo prefix is left untouched
+because Delta partition specifications cannot be migrated in place. Start it:
 
 ```powershell
 .\airflow-local.ps1 start
@@ -239,9 +313,8 @@ python3 tools/run_partition.py --date 2026-07-18 --stage transactions --print-qu
 The `window` parameter accepts `daily`, `weekly`, or `monthly`. A weekly trigger aligns the
 logical date to Monday and replaces all transaction date partitions in the seven-day interval;
 a monthly trigger aligns to the first day and replaces that calendar month. Customer and account
-remain physically partitioned by stable entity buckets because date partitioning performs poorly
-for current-state SCD2 lookups. Transactions remain physically partitioned by `business_date`, so
-weekly/monthly replacement only touches the included daily partitions.
+remain physically partitioned by tenant. Transactions remain physically partitioned by tenant and
+`business_date`, so weekly/monthly replacement only touches the included daily partitions.
 
 The TPCH profile is in `sql/profiles/tpch/`. Production remains in `sql/`; set
 `TRINO_SQL_PROFILE=production` and the values from `.env.example` to use it.

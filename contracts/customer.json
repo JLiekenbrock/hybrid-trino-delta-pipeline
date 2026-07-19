@@ -1,7 +1,8 @@
 {
-  "business_key": "customer_id",
-  "partition_by": ["entity_bucket"],
+  "business_key": ["tenant_id", "customer_id"],
+  "partition_by": ["tenant_id"],
   "fields": [
+    {"name": "tenant_id", "type": "string", "nullable": false},
     {"name": "customer_id", "type": "string", "nullable": false},
     {"name": "customer_segment", "type": "string", "nullable": true},
     {"name": "valid_from", "type": "timestamp_us", "nullable": false},
@@ -12,6 +13,7 @@
   ],
   "source_fields": [
     {"name": "merge_key", "type": "string", "nullable": true},
+    {"name": "tenant_id", "type": "string", "nullable": false},
     {"name": "customer_id", "type": "string", "nullable": false},
     {"name": "customer_segment", "type": "string", "nullable": true},
     {"name": "valid_from", "type": "timestamp_us", "nullable": false},

@@ -11,6 +11,9 @@ models:
       storage_format: delta
       orchestration: airflow
     columns:
+      - name: tenant_id
+        description: Tenant boundary; part of the composite customer key and physical S3 partition.
+        data_tests: [not_null]
       - name: customer_id
         data_tests: [not_null]
       - name: valid_from
@@ -30,6 +33,9 @@ models:
       storage_format: delta
       orchestration: airflow
     columns:
+      - name: tenant_id
+        description: Tenant boundary; part of every account/customer join and physical S3 partition.
+        data_tests: [not_null]
       - name: account_id
         data_tests: [not_null]
       - name: customer_id
@@ -47,8 +53,11 @@ models:
       storage_format: delta
       orchestration: airflow
     columns:
+      - name: tenant_id
+        description: Tenant boundary and first physical partition column.
+        data_tests: [not_null]
       - name: transaction_id
-        data_tests: [not_null, unique]
+        data_tests: [not_null]
       - name: account_id
         data_tests: [not_null]
       - name: business_date

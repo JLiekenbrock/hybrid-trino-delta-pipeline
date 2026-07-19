@@ -36,7 +36,7 @@ def schema(fields: list[dict]) -> pa.Schema:
 
 @dataclass(frozen=True)
 class Contract:
-    business_key: str
+    business_keys: tuple[str, ...]
     partition_by: list[str]
     target_schema: pa.Schema
     source_schema: pa.Schema
@@ -47,7 +47,11 @@ def load_contract(path: Path) -> Contract:
     target = schema(value["fields"])
     source_fields = value.get("source_fields", value["fields"])
     return Contract(
-        business_key=value["business_key"],
+        business_keys=tuple(
+            value["business_key"]
+            if isinstance(value["business_key"], list)
+            else [value["business_key"]]
+        ),
         partition_by=value["partition_by"],
         target_schema=target,
         source_schema=schema(source_fields),

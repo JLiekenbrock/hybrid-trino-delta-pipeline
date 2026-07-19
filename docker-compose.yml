@@ -53,7 +53,7 @@ services:
       AIRFLOW__CORE__DAGBAG_IMPORT_TIMEOUT: "60"
       HYBRID_PROJECT_DIR: /opt/project
       PYTHON: /home/airflow/.local/bin/python
-      OUTPUT_URI: ${OUTPUT_URI:-s3://hybrid/delta}
+      OUTPUT_URI: ${OUTPUT_URI:-s3://hybrid/delta-multitenant}
       TRINO_HOST: ${TRINO_HOST:-trino}
       TRINO_PORT: ${TRINO_PORT:-8080}
       TRINO_HTTP_SCHEME: ${TRINO_HTTP_SCHEME:-http}
