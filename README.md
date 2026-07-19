@@ -15,7 +15,8 @@ customer (Trino -> Arrow -> Delta SCD2 MERGE)
 
 Each Airflow task is a separate retry and KubernetesExecutor pod boundary. The Delta tables
 are durable handoffs, and Trino reads their latest committed snapshots. DAG runs are serialized
-(`max_active_runs=1`) so daily SCD2 changes cannot commit out of effective-date order.
+(`max_active_runs=1`) so daily SCD2 changes cannot commit out of effective-date order. Automatic
+catch-up is disabled; trigger historical dates deliberately in ascending order.
 
 ## Publishing behavior
 
@@ -88,7 +89,15 @@ instead of adding it to every ingestion task.
 
 ## Local Airflow UI
 
-The local UI uses the official Airflow 3.3.0 image:
+The local stack includes:
+
+- Airflow at <http://localhost:8080>
+- read-only Trino TPCH at <http://localhost:8081>
+- MinIO S3 API at <http://localhost:9000>
+- MinIO console at <http://localhost:9001> (`minioadmin` / `minioadmin`)
+
+The default demo maps TPCH `customer -> orders -> lineitem` onto the three pipeline stages,
+uses the `tiny` schema, and publishes Delta tables under `s3://hybrid/delta` in MinIO. Start it:
 
 ```powershell
 .\airflow-local.ps1 start
@@ -97,3 +106,8 @@ The local UI uses the official Airflow 3.3.0 image:
 
 Open <http://localhost:8080> and select `hybrid_transactions`. Stop the environment with
 `.\airflow-local.ps1 stop`. This standalone deployment is for local development only.
+
+Trigger the paused DAG for any date. Customer and account are stable SCD2 snapshots, so reruns
+are idempotent; lineitem is transactionally replaced in the triggered `business_date` partition.
+The TPCH profile is in `sql/profiles/tpch/`. Production remains in `sql/`; set
+`TRINO_SQL_PROFILE=production` and the values from `.env.example` to use it.

@@ -15,7 +15,8 @@ PROJECT = Path(os.environ.get("HYBRID_PROJECT_DIR", Path(__file__).resolve().par
     dag_id="hybrid_transactions",
     start_date=datetime(2026, 1, 1),
     schedule="@daily",
-    catchup=True,
+    # Backfill SCD2 dates deliberately and in order; do not enqueue history on unpause.
+    catchup=False,
     # SCD2 changes must commit in effective-date order.
     max_active_runs=1,
     tags=["trino", "delta", "scd2", "dbt"],
@@ -28,12 +29,12 @@ def hybrid_transactions():
         pool=os.getenv("HYBRID_AIRFLOW_POOL", "default_pool"),
     )
 
-    def run_stage(stage: str, ds: str) -> None:
+    def run_stage(stage: str, business_date: str) -> None:
         subprocess.run(
             [
                 os.environ.get("PYTHON", "python"),
                 str(PROJECT / "tools" / "run_partition.py"),
-                "--date", ds,
+                "--date", business_date,
                 "--stage", stage,
             ],
             cwd=PROJECT,
@@ -41,16 +42,16 @@ def hybrid_transactions():
         )
 
     @task(task_id="customer", **task_defaults)
-    def customer(ds: str) -> None:
-        run_stage("customer", ds)
+    def customer(business_date: str) -> None:
+        run_stage("customer", business_date)
 
     @task(task_id="account", **task_defaults)
-    def account(ds: str) -> None:
-        run_stage("account", ds)
+    def account(business_date: str) -> None:
+        run_stage("account", business_date)
 
     @task(task_id="transactions", **task_defaults)
-    def transactions(ds: str) -> None:
-        run_stage("transactions", ds)
+    def transactions(business_date: str) -> None:
+        run_stage("transactions", business_date)
 
     customer_result = customer("{{ ds }}")
     account_result = account("{{ ds }}")

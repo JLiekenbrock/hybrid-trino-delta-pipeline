@@ -40,8 +40,13 @@ def trino_connection():
 def render_query(stage: str, day: date, bootstrap: bool = False) -> str:
     start = datetime.combine(day, datetime_time.min)
     end = start + timedelta(days=1)
+    profile = os.getenv("TRINO_SQL_PROFILE", "production")
+    directory = ROOT / "sql" if profile == "production" else ROOT / "sql" / "profiles" / profile
     suffix = "_bootstrap" if bootstrap else ""
-    return (ROOT / "sql" / f"{stage}{suffix}.sql").read_text(encoding="utf-8").format(
+    path = directory / f"{stage}{suffix}.sql"
+    if not path.exists():
+        path = directory / f"{stage}.sql"
+    return path.read_text(encoding="utf-8").format(
         business_date=day.isoformat(),
         start_ts=start.isoformat(sep=" "),
         end_ts=end.isoformat(sep=" "),
@@ -86,6 +91,7 @@ def storage_options() -> dict[str, str]:
     names = (
         "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN",
         "AWS_REGION", "AWS_ENDPOINT_URL", "AWS_ALLOW_HTTP",
+        "AWS_FORCE_PATH_STYLE", "AWS_S3_ALLOW_UNSAFE_RENAME",
     )
     return {name: os.environ[name] for name in names if os.getenv(name)}
 

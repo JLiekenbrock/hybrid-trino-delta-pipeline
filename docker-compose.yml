@@ -1,4 +1,43 @@
 services:
+  trino:
+    image: trinodb/trino:482
+    restart: unless-stopped
+    ports:
+      - "8081:8080"
+    volumes:
+      - ./trino/catalog:/etc/trino/catalog:ro
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/v1/info"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    restart: unless-stopped
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c"]
+    command: ["mc alias set local http://minio:9000 minioadmin minioadmin && mc mb --ignore-existing local/hybrid"]
+
   airflow:
     build:
       context: .
@@ -14,23 +53,31 @@ services:
       AIRFLOW__CORE__DAGBAG_IMPORT_TIMEOUT: "60"
       HYBRID_PROJECT_DIR: /opt/project
       PYTHON: /home/airflow/.local/bin/python
-      OUTPUT_URI: ${OUTPUT_URI:-s3://replace-me/hybrid-output}
-      TRINO_HOST: ${TRINO_HOST:-replace-me}
-      TRINO_PORT: ${TRINO_PORT:-443}
-      TRINO_HTTP_SCHEME: ${TRINO_HTTP_SCHEME:-https}
-      TRINO_USER: ${TRINO_USER:-replace-me}
-      TRINO_CATALOG: ${TRINO_CATALOG:-replace-me}
-      TRINO_SCHEMA: ${TRINO_SCHEMA:-replace-me}
-      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
-      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      OUTPUT_URI: ${OUTPUT_URI:-s3://hybrid/delta}
+      TRINO_HOST: ${TRINO_HOST:-trino}
+      TRINO_PORT: ${TRINO_PORT:-8080}
+      TRINO_HTTP_SCHEME: ${TRINO_HTTP_SCHEME:-http}
+      TRINO_USER: ${TRINO_USER:-airflow}
+      TRINO_CATALOG: ${TRINO_CATALOG:-tpch}
+      TRINO_SCHEMA: ${TRINO_SCHEMA:-tiny}
+      TRINO_SQL_PROFILE: ${TRINO_SQL_PROFILE:-tpch}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-minioadmin}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-minioadmin}
       AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
-      AWS_REGION: ${AWS_REGION:-}
-      AWS_ENDPOINT_URL: ${AWS_ENDPOINT_URL:-}
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      AWS_ENDPOINT_URL: ${AWS_ENDPOINT_URL:-http://minio:9000}
+      AWS_ALLOW_HTTP: ${AWS_ALLOW_HTTP:-true}
+      AWS_FORCE_PATH_STYLE: ${AWS_FORCE_PATH_STYLE:-true}
       DELTA_TARGET_FILE_SIZE: ${DELTA_TARGET_FILE_SIZE:-536870912}
     volumes:
       - ./airflow/dags:/opt/airflow/dags:ro
       - ./:/opt/project
       - airflow_state:/opt/airflow
+    depends_on:
+      trino:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "curl", "--fail", "http://localhost:8080/api/v2/monitor/health"]
       interval: 15s
@@ -40,3 +87,4 @@ services:
 
 volumes:
   airflow_state:
+  minio_data:
