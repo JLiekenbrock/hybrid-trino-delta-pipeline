@@ -1,0 +1,15 @@
+FROM python:3.12-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+WORKDIR /opt/pipeline
+
+COPY requirements-pipeline.txt .
+RUN pip install --no-cache-dir -r requirements-pipeline.txt
+
+COPY contracts ./contracts
+COPY sql ./sql
+COPY tools ./tools
+
+ENTRYPOINT ["python", "/opt/pipeline/tools/run_partition.py"]

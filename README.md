@@ -22,6 +22,12 @@ connector is the read-only source, MinIO provides S3-compatible storage, and Air
 pipeline. Production replaces those endpoints through environment variables and the production
 SQL profile; the execution design remains the same.
 
+For production on Stackable Airflow, keep the Stackable Airflow runtime separate from the pure
+ETL image and launch only the three data stages with KubernetesPodOperator. Unrelated Airflow
+tasks continue to use the normal executor image. See
+[`docs/stackable-airflow.md`](docs/stackable-airflow.md) for the image, DAG, RBAC and secret
+examples.
+
 ## Runtime graph
 
 ```text
@@ -101,11 +107,28 @@ Critical transport and schema checks remain inline in the writer.
 
 ## Configure and run
 
-Install the project:
+Windows and macOS/Linux are both supported. Use Python 3.10-3.12.
+
+Windows PowerShell:
 
 ```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
 python -m pip install -e .
 ```
+
+macOS/Linux:
+
+```shell
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -e .
+```
+
+On macOS, install and start Docker Desktop before using the local stack. Apple Silicon is
+supported by the Python and container dependencies; the Compose file intentionally has no
+architecture override, so Docker selects native `arm64` images. Rosetta is only needed if a
+private image is published for `amd64` alone.
 
 Set the Trino variables plus `OUTPUT_URI` and the S3 credentials shown in `.env.example`.
 Then run stages in order:
@@ -114,6 +137,14 @@ Then run stages in order:
 .\run.ps1 -Date 2026-07-18 -Stage customer
 .\run.ps1 -Date 2026-07-18 -Stage account
 .\run.ps1 -Date 2026-07-18 -Stage transactions
+```
+
+macOS/Linux:
+
+```shell
+./run.sh 2026-07-18 customer
+./run.sh 2026-07-18 account
+./run.sh 2026-07-18 transactions
 ```
 
 `DELTA_TARGET_FILE_SIZE` defaults to 512 MiB. Run compaction/checkpoint maintenance separately
@@ -136,8 +167,16 @@ uses the `tiny` schema, and publishes Delta tables under `s3://hybrid/delta` in 
 .\airflow-local.ps1 logs
 ```
 
+macOS/Linux:
+
+```shell
+./airflow-local.sh start
+./airflow-local.sh logs
+```
+
 Open <http://localhost:8080> and select `hybrid_transactions`. Stop the environment with
-`.\airflow-local.ps1 stop`. This standalone deployment is for local development only.
+`.\airflow-local.ps1 stop` on Windows or `./airflow-local.sh stop` on macOS/Linux. This
+standalone deployment is for local development only.
 
 Trigger the paused DAG for any date. Customer and account are stable SCD2 snapshots, so reruns
 are idempotent; lineitem is transactionally replaced in the triggered `business_date` partition.
@@ -151,6 +190,13 @@ python tools/run_partition.py --date 2026-07-18 --stage transactions --print-que
   --query-params '{"minimum_transaction_amount": 1000}'
 ```
 
+macOS/Linux:
+
+```shell
+python3 tools/run_partition.py --date 2026-07-18 --stage transactions --print-query \
+  --query-params '{"minimum_transaction_amount": 1000}'
+```
+
 The `window` parameter accepts `daily`, `weekly`, or `monthly`. A weekly trigger aligns the
 logical date to Monday and replaces all transaction date partitions in the seven-day interval;
 a monthly trigger aligns to the first day and replaces that calendar month. Customer and account
@@ -160,6 +206,7 @@ weekly/monthly replacement only touches the included daily partitions.
 
 The TPCH profile is in `sql/profiles/tpch/`. Production remains in `sql/`; set
 `TRINO_SQL_PROFILE=production` and the values from `.env.example` to use it.
+
 ## Generate dbt documentation
 
 Generate a reproducible dbt catalog and lineage graph against the local Delta
@@ -167,6 +214,12 @@ tables:
 
 ```powershell
 .\dbt-docs.ps1
+```
+
+macOS/Linux:
+
+```shell
+./dbt-docs.sh
 ```
 
 Open `target/index.html` after the command finishes. The graph models the Trino

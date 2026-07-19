@@ -1,0 +1,9 @@
+.git
+.env
+.venv
+*.egg-info
+__pycache__
+data
+dbt_packages
+logs
+target
