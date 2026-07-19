@@ -22,6 +22,7 @@ QUERY_PARAMETERS = """{
   "customer_segment": {{ params.customer_segment | tojson }},
   "account_status": {{ params.account_status | tojson }},
   "minimum_transaction_amount": {{ params.minimum_transaction_amount | tojson }}
+  ,"tenant_ids": {{ params.tenant_ids | tojson }}
 }"""
 
 
@@ -99,6 +100,9 @@ def validation_pod(model: str, upstream_task_id: str) -> KubernetesPodOperator:
         "customer_segment": Param(None, type=["null", "string"]),
         "account_status": Param(None, type=["null", "string"]),
         "minimum_transaction_amount": Param(0, type="number", minimum=0),
+        "tenant_ids": Param(
+            [], type="array", items={"type": "string", "minLength": 1}, maxItems=400
+        ),
         "fetch_size": Param(100_000, type="integer", minimum=1, maximum=1_000_000),
         "window": Param("daily", type="string", enum=["daily", "weekly", "monthly"]),
     },

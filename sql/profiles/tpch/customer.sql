@@ -10,4 +10,5 @@ select
     to_hex(md5(to_utf8(concat(name, '|', mktsegment, '|', cast(nationkey as varchar))))) as attribute_hash,
     cast(bitwise_and(custkey, 255) as integer) as entity_bucket
 from customer
-where ({customer_segment} is null or mktsegment = {customer_segment})
+where ({all_tenants} or 'tpch' in ({tenant_values}))
+  and ({customer_segment} is null or mktsegment = {customer_segment})

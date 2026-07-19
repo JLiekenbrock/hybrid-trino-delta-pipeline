@@ -12,5 +12,6 @@ from lineitem l
 inner join orders o on l.orderkey = o.orderkey
 inner join customer c on o.custkey = c.custkey
 where ({customer_segment} is null or c.mktsegment = {customer_segment})
+  and ({all_tenants} or 'tpch' in ({tenant_values}))
   and ({account_status} is null or o.orderstatus = {account_status})
   and l.extendedprice >= {minimum_transaction_amount}

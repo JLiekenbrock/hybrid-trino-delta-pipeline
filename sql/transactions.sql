@@ -19,6 +19,7 @@ inner join published.customer c
    and c.is_current = true
 where t.transaction_ts >= timestamp '{start_ts}'
   and t.transaction_ts < timestamp '{end_ts}'
+  and ({all_tenants} or cast(t.tenant_id as varchar) in ({tenant_values}))
   and t.status = 'posted'
   and ({customer_segment} is null or c.customer_segment = {customer_segment})
   and ({account_status} is null or a.account_type = {account_status})

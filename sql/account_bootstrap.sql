@@ -13,6 +13,7 @@ with ranked_source as (
        and cast(a.customer_id as varchar) = c.customer_id
        and c.is_current = true
     where a.updated_at < timestamp '{end_ts}'
+      and ({all_tenants} or cast(a.tenant_id as varchar) in ({tenant_values}))
       and ({customer_segment} is null or c.customer_segment = {customer_segment})
       and ({account_status} is null or cast(a.account_type as varchar) = {account_status})
 )

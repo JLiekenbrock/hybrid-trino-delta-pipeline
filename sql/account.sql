@@ -14,6 +14,7 @@ with ranked_source as (
        and c.is_current = true
     where a.updated_at >= timestamp '{start_ts}'
       and a.updated_at < timestamp '{end_ts}'
+      and ({all_tenants} or cast(a.tenant_id as varchar) in ({tenant_values}))
       and ({customer_segment} is null or c.customer_segment = {customer_segment})
       and ({account_status} is null or cast(a.account_type as varchar) = {account_status})
 ),
@@ -33,6 +34,7 @@ current_target as (
     select tenant_id, account_id, attribute_hash
     from published.account
     where is_current = true
+      and ({all_tenants} or tenant_id in ({tenant_values}))
 ),
 changes as (
     select i.*, t.account_id as existing_account_id

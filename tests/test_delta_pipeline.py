@@ -15,7 +15,7 @@ PROJECT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT / "tools"))
 
 from contracts import load_contract  # noqa: E402
-from run_partition import write_scd2, write_transactions  # noqa: E402
+from run_partition import query_template_values, write_scd2, write_transactions  # noqa: E402
 
 
 def reader(schema: pa.Schema, rows: list[dict]) -> pa.RecordBatchReader:
@@ -108,16 +108,41 @@ class DeltaPipelineTest(unittest.TestCase):
                 "amount": Decimal("10.00"),
                 "currency": "EUR",
             }
+            tenant_b = {
+                **base,
+                "tenant_id": "tenant-b",
+                "transaction_id": "t2",
+            }
             write_transactions(
-                uri, business_date, window_end, reader(contract.source_schema, [base]), contract
+                uri,
+                business_date,
+                window_end,
+                reader(contract.source_schema, [base, tenant_b]),
+                contract,
             )
             replacement = {**base, "amount": Decimal("12.00")}
             write_transactions(
-                uri, business_date, window_end, reader(contract.source_schema, [replacement]), contract
+                uri,
+                business_date,
+                window_end,
+                reader(contract.source_schema, [replacement]),
+                contract,
+                tenant_ids=["tenant-a"],
             )
             rows = DeltaTable(uri).to_pyarrow_table().to_pylist()
-            self.assertEqual(len(rows), 1)
-            self.assertEqual(rows[0]["amount"], Decimal("12.00"))
+            self.assertEqual(len(rows), 2)
+            amounts = {row["tenant_id"]: row["amount"] for row in rows}
+            self.assertEqual(amounts["tenant-a"], Decimal("12.00"))
+            self.assertEqual(amounts["tenant-b"], Decimal("10.00"))
+
+    def test_tenant_query_parameters_are_validated_and_escaped(self) -> None:
+        values = query_template_values(
+            date(2026, 1, 1), {"tenant_ids": ["tenant-a", "tenant'o", "tenant-a"]}
+        )
+        self.assertEqual(values["all_tenants"], "false")
+        self.assertEqual(values["tenant_values"], "'tenant-a', 'tenant''o'")
+        with self.assertRaisesRegex(ValueError, "array of non-empty strings"):
+            query_template_values(date(2026, 1, 1), {"tenant_ids": "tenant-a"})
 
 
 if __name__ == "__main__":

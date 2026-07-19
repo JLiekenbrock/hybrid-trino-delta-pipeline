@@ -10,6 +10,7 @@ with ranked_source as (
     from analytics.customers
     where updated_at >= timestamp '{start_ts}'
       and updated_at < timestamp '{end_ts}'
+      and ({all_tenants} or cast(tenant_id as varchar) in ({tenant_values}))
       and ({customer_segment} is null or cast(customer_segment as varchar) = {customer_segment})
 ),
 incoming as (
@@ -27,6 +28,7 @@ current_target as (
     select tenant_id, customer_id, attribute_hash
     from published.customer
     where is_current = true
+      and ({all_tenants} or tenant_id in ({tenant_values}))
 ),
 changes as (
     select i.*, t.customer_id as existing_customer_id

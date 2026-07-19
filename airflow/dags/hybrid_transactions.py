@@ -25,6 +25,14 @@ PROJECT = Path(os.environ.get("HYBRID_PROJECT_DIR", Path(__file__).resolve().par
         "customer_segment": Param(None, type=["null", "string"], title="Customer segment"),
         "account_status": Param(None, type=["null", "string"], title="Account status"),
         "minimum_transaction_amount": Param(0, type="number", minimum=0, title="Minimum transaction amount"),
+        "tenant_ids": Param(
+            [],
+            type="array",
+            items={"type": "string", "minLength": 1},
+            maxItems=400,
+            title="Tenant IDs",
+            description="Empty processes all tenants; otherwise only the listed tenants are read and written.",
+        ),
         "fetch_size": Param(100_000, type="integer", minimum=1, maximum=1_000_000, title="Trino fetch size"),
         "window": Param(
             "daily",
@@ -105,6 +113,7 @@ def hybrid_transactions():
         "customer_segment": "{{ params.customer_segment }}",
         "account_status": "{{ params.account_status }}",
         "minimum_transaction_amount": "{{ params.minimum_transaction_amount }}",
+        "tenant_ids": "{{ params.tenant_ids }}",
     }
     fetch_size = "{{ params.fetch_size }}"
     window = "{{ params.window }}"

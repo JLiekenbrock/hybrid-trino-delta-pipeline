@@ -80,6 +80,21 @@ The Delta tables are durable handoffs, and Trino reads their latest committed sn
 (`max_active_runs=1`) so daily SCD2 changes cannot commit out of effective-date order. Automatic
 catch-up is disabled; trigger historical dates deliberately in ascending order.
 
+### Draft asynchronous categorization extension
+
+The current implementation still publishes one `transactions` table. A proposed extension splits
+it into an early, replayable `transactions_base` Delta table and a complete
+`transactions_curated` table after an external Kafka categorization service responds. Because
+categorization may take hours, preparation and finalization are separate DAGs; no Spark job or
+Kubernetes worker waits for the service. Airflow determines readiness by comparing the exact set
+of persisted request IDs with the service's result table, not by trusting counts alone.
+
+See [`docs/transaction-categorization-draft.md`](docs/transaction-categorization-draft.md) for the
+table contracts, polling ownership, completion rules, failure policy decisions and cutover plan.
+Airflow also loads `transaction_categorization_draft` as a paused, manual, graph-only DAG. Its
+tasks are harmless placeholders so the proposed boundaries can be reviewed in the UI; they do
+not read, publish, poll, test or write any data.
+
 ## Publishing behavior
 
 - `customer`: tenant-aware SCD2, physically partitioned by `tenant_id`.
@@ -95,8 +110,9 @@ adapt it if every intraday version must be retained.
 
 ## Multi-tenant execution decision
 
-The production design processes all tenants in one Trino query and one Delta commit per dataset
-stage. There are at most roughly 400 tenants, they share credentials and catalogs, and Trino can
+By default, the production design processes all tenants in one Trino query and one Delta commit
+per dataset stage. Airflow's `tenant_ids` parameter can instead select any subset (up to 400 IDs);
+an empty list means all tenants. There are at most roughly 400 tenants, they share credentials and catalogs, and Trino can
 parallelize their source partitions across its workers. This avoids hundreds of Kubernetes pod
 starts, small commits and concurrent Delta-log conflicts. It also keeps the version-checked
 rollback safe because only one writer owns a table during a stage.
@@ -294,20 +310,20 @@ standalone deployment is for local development only.
 Trigger the paused DAG for any date. Customer and account are stable SCD2 snapshots, so reruns
 are idempotent; lineitem is transactionally replaced in the triggered `business_date` partition.
 The trigger form also exposes validated query parameters for customer segment, account status,
-minimum transaction amount and Trino fetch size. Airflow passes these to every task; the runner
+minimum transaction amount, tenant IDs and Trino fetch size. Airflow passes these to every task; the runner
 escapes strings and validates numeric values before rendering the SQL profile. Preview a rendered
 query without executing or writing it:
 
 ```powershell
 python tools/run_partition.py --date 2026-07-18 --stage transactions --print-query `
-  --query-params '{"minimum_transaction_amount": 1000}'
+  --query-params '{"tenant_ids":["tenant-a"],"minimum_transaction_amount":1000}'
 ```
 
 macOS/Linux:
 
 ```shell
 python3 tools/run_partition.py --date 2026-07-18 --stage transactions --print-query \
-  --query-params '{"minimum_transaction_amount": 1000}'
+  --query-params '{"tenant_ids":["tenant-a"],"minimum_transaction_amount":1000}'
 ```
 
 The `window` parameter accepts `daily`, `weekly`, or `monthly`. A weekly trigger aligns the
@@ -315,6 +331,10 @@ logical date to Monday and replaces all transaction date partitions in the seven
 a monthly trigger aligns to the first day and replaces that calendar month. Customer and account
 remain physically partitioned by tenant. Transactions remain physically partitioned by tenant and
 `business_date`, so weekly/monthly replacement only touches the included daily partitions.
+When `tenant_ids` is supplied, the same validated selection scopes both the Trino source query
+and the Delta `replaceWhere` predicate. A tenant-specific retry therefore cannot replace another
+tenant's transaction partitions. Customer/account SCD2 merges are naturally key-scoped and their
+source and current-target scans receive the same tenant filter.
 
 The TPCH profile is in `sql/profiles/tpch/`. Production remains in `sql/`; set
 `TRINO_SQL_PROFILE=production` and the values from `.env.example` to use it.

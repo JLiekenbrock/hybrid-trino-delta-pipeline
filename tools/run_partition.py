@@ -68,6 +68,16 @@ def query_template_values(
         raise ValueError("minimum_transaction_amount must be numeric") from exc
     if minimum_amount < 0:
         raise ValueError("minimum_transaction_amount must be non-negative")
+    tenant_ids = parameters.get("tenant_ids", [])
+    if tenant_ids is None:
+        tenant_ids = []
+    if not isinstance(tenant_ids, list) or any(
+        not isinstance(tenant_id, str) or not tenant_id.strip() for tenant_id in tenant_ids
+    ):
+        raise ValueError("tenant_ids must be an array of non-empty strings")
+    if len(tenant_ids) > 400:
+        raise ValueError("tenant_ids accepts at most 400 tenants")
+    tenant_ids = list(dict.fromkeys(tenant_id.strip() for tenant_id in tenant_ids))
     start_day, end_day = processing_window(day, window)
     start = datetime.combine(start_day, datetime_time.min)
     end = datetime.combine(end_day, datetime_time.min)
@@ -80,6 +90,9 @@ def query_template_values(
         "customer_segment": sql_string(parameters.get("customer_segment")),
         "account_status": sql_string(parameters.get("account_status")),
         "minimum_transaction_amount": format(minimum_amount, "f"),
+        "all_tenants": "true" if not tenant_ids else "false",
+        # NULL keeps the generated IN clause syntactically valid when all tenants are selected.
+        "tenant_values": ", ".join(sql_string(tenant_id) for tenant_id in tenant_ids) or "NULL",
     }
 
 
@@ -229,7 +242,12 @@ def write_scd2(stage: str, uri: str, reader: pa.RecordBatchReader, contract: Con
 
 
 def write_transactions(
-    uri: str, window_start: date, window_end: date, reader: pa.RecordBatchReader, contract: Contract
+    uri: str,
+    window_start: date,
+    window_end: date,
+    reader: pa.RecordBatchReader,
+    contract: Contract,
+    tenant_ids: list[str] | None = None,
 ) -> dict:
     table = open_table(uri)
     first, reader = peek(reader)
@@ -237,6 +255,9 @@ def write_transactions(
         f"business_date >= '{window_start.isoformat()}' AND "
         f"business_date < '{window_end.isoformat()}'"
     )
+    if tenant_ids:
+        tenant_values = ", ".join(sql_string(tenant_id) for tenant_id in tenant_ids)
+        predicate += f" AND tenant_id IN ({tenant_values})"
     if first is None:
         metrics = table.delete(predicate=predicate) if table else {}
         return {"operation": "delete_empty_partition", **metrics}
@@ -269,6 +290,10 @@ def main() -> None:
     if args.fetch_size < 1:
         parser.error("--fetch-size must be at least 1")
     window_start, window_end = processing_window(args.date, args.window)
+    # Validate and normalize tenant selection before querying or constructing replaceWhere.
+    query_template_values(args.date, args.query_params, args.window)
+    tenant_ids = args.query_params.get("tenant_ids") or []
+    tenant_ids = list(dict.fromkeys(tenant_id.strip() for tenant_id in tenant_ids))
     rendered_query = render_query(
         args.stage, args.date, args.query_params, bootstrap=False, window=args.window
     )
@@ -295,7 +320,9 @@ def main() -> None:
     if args.stage in SCD2_STAGES:
         metrics = write_scd2(args.stage, uri, reader, contract)
     else:
-        metrics = write_transactions(uri, window_start, window_end, reader, contract)
+        metrics = write_transactions(
+            uri, window_start, window_end, reader, contract, tenant_ids=tenant_ids
+        )
     committed_version = DeltaTable(uri, storage_options=storage_options()).version()
     result = {
         "business_date": args.date.isoformat(),
@@ -303,6 +330,8 @@ def main() -> None:
         "window_start": window_start.isoformat(),
         "window_end_exclusive": window_end.isoformat(),
         "stage": args.stage,
+        "tenant_ids": tenant_ids,
+        "tenant_scope": "selected" if tenant_ids else "all",
         "delta_uri": uri, "total_seconds": round(time.perf_counter() - started, 3),
         "previous_version": previous_version,
         "committed_version": committed_version,
