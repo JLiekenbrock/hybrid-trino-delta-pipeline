@@ -141,6 +141,23 @@ Open <http://localhost:8080> and select `hybrid_transactions`. Stop the environm
 
 Trigger the paused DAG for any date. Customer and account are stable SCD2 snapshots, so reruns
 are idempotent; lineitem is transactionally replaced in the triggered `business_date` partition.
+The trigger form also exposes validated query parameters for customer segment, account status,
+minimum transaction amount and Trino fetch size. Airflow passes these to every task; the runner
+escapes strings and validates numeric values before rendering the SQL profile. Preview a rendered
+query without executing or writing it:
+
+```powershell
+python tools/run_partition.py --date 2026-07-18 --stage transactions --print-query `
+  --query-params '{"minimum_transaction_amount": 1000}'
+```
+
+The `window` parameter accepts `daily`, `weekly`, or `monthly`. A weekly trigger aligns the
+logical date to Monday and replaces all transaction date partitions in the seven-day interval;
+a monthly trigger aligns to the first day and replaces that calendar month. Customer and account
+remain physically partitioned by stable entity buckets because date partitioning performs poorly
+for current-state SCD2 lookups. Transactions remain physically partitioned by `business_date`, so
+weekly/monthly replacement only touches the included daily partitions.
+
 The TPCH profile is in `sql/profiles/tpch/`. Production remains in `sql/`; set
 `TRINO_SQL_PROFILE=production` and the values from `.env.example` to use it.
 ## Generate dbt documentation

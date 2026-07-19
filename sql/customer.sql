@@ -9,6 +9,7 @@ with ranked_source as (
     from analytics.customers
     where updated_at >= timestamp '{start_ts}'
       and updated_at < timestamp '{end_ts}'
+      and ({customer_segment} is null or cast(customer_segment as varchar) = {customer_segment})
 ),
 incoming as (
     select

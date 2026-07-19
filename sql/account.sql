@@ -12,6 +12,8 @@ with ranked_source as (
        and c.is_current = true
     where a.updated_at >= timestamp '{start_ts}'
       and a.updated_at < timestamp '{end_ts}'
+      and ({customer_segment} is null or c.customer_segment = {customer_segment})
+      and ({account_status} is null or cast(a.account_type as varchar) = {account_status})
 ),
 incoming as (
     select

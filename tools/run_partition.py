@@ -7,6 +7,7 @@ import json
 import os
 import time
 from datetime import date, datetime, time as datetime_time, timedelta
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Iterator
 
@@ -37,9 +38,58 @@ def trino_connection():
     )
 
 
-def render_query(stage: str, day: date, bootstrap: bool = False) -> str:
-    start = datetime.combine(day, datetime_time.min)
-    end = start + timedelta(days=1)
+def sql_string(value: object) -> str:
+    if value is None or value == "":
+        return "NULL"
+    return "'" + str(value).replace("'", "''") + "'"
+
+
+def processing_window(day: date, mode: str) -> tuple[date, date]:
+    if mode == "daily":
+        start = day
+        end = start + timedelta(days=1)
+    elif mode == "weekly":
+        start = day - timedelta(days=day.weekday())
+        end = start + timedelta(days=7)
+    elif mode == "monthly":
+        start = day.replace(day=1)
+        end = (start.replace(day=28) + timedelta(days=4)).replace(day=1)
+    else:
+        raise ValueError(f"unsupported processing window: {mode}")
+    return start, end
+
+
+def query_template_values(
+    day: date, parameters: dict[str, object], window: str = "daily"
+) -> dict[str, str]:
+    try:
+        minimum_amount = Decimal(str(parameters.get("minimum_transaction_amount", 0)))
+    except InvalidOperation as exc:
+        raise ValueError("minimum_transaction_amount must be numeric") from exc
+    if minimum_amount < 0:
+        raise ValueError("minimum_transaction_amount must be non-negative")
+    start_day, end_day = processing_window(day, window)
+    start = datetime.combine(start_day, datetime_time.min)
+    end = datetime.combine(end_day, datetime_time.min)
+    return {
+        "business_date": start_day.isoformat(),
+        "window_start_date": start_day.isoformat(),
+        "window_end_date": end_day.isoformat(),
+        "start_ts": start.isoformat(sep=" "),
+        "end_ts": end.isoformat(sep=" "),
+        "customer_segment": sql_string(parameters.get("customer_segment")),
+        "account_status": sql_string(parameters.get("account_status")),
+        "minimum_transaction_amount": format(minimum_amount, "f"),
+    }
+
+
+def render_query(
+    stage: str,
+    day: date,
+    parameters: dict[str, object],
+    bootstrap: bool = False,
+    window: str = "daily",
+) -> str:
     profile = os.getenv("TRINO_SQL_PROFILE", "production")
     directory = ROOT / "sql" if profile == "production" else ROOT / "sql" / "profiles" / profile
     suffix = "_bootstrap" if bootstrap else ""
@@ -47,9 +97,7 @@ def render_query(stage: str, day: date, bootstrap: bool = False) -> str:
     if not path.exists():
         path = directory / f"{stage}.sql"
     return path.read_text(encoding="utf-8").format(
-        business_date=day.isoformat(),
-        start_ts=start.isoformat(sep=" "),
-        end_ts=end.isoformat(sep=" "),
+        **query_template_values(day, parameters, window)
     )
 
 
@@ -166,10 +214,15 @@ def write_scd2(stage: str, uri: str, reader: pa.RecordBatchReader, contract: Con
     return {"operation": "merge", **metrics}
 
 
-def write_transactions(uri: str, day: date, reader: pa.RecordBatchReader, contract: Contract) -> dict:
+def write_transactions(
+    uri: str, window_start: date, window_end: date, reader: pa.RecordBatchReader, contract: Contract
+) -> dict:
     table = open_table(uri)
     first, reader = peek(reader)
-    predicate = f"business_date = '{day.isoformat()}'"
+    predicate = (
+        f"business_date >= '{window_start.isoformat()}' AND "
+        f"business_date < '{window_end.isoformat()}'"
+    )
     if first is None:
         metrics = table.delete(predicate=predicate) if table else {}
         return {"operation": "delete_empty_partition", **metrics}
@@ -192,7 +245,21 @@ def main() -> None:
     parser.add_argument("--stage", required=True, choices=("customer", "account", "transactions"))
     parser.add_argument("--output-uri", default=os.getenv("OUTPUT_URI"))
     parser.add_argument("--fetch-size", type=int, default=100_000)
+    parser.add_argument("--query-params", type=json.loads, default={})
+    parser.add_argument("--window", choices=("daily", "weekly", "monthly"), default="daily")
+    parser.add_argument("--print-query", action="store_true")
     args = parser.parse_args()
+    if not isinstance(args.query_params, dict):
+        parser.error("--query-params must be a JSON object")
+    if args.fetch_size < 1:
+        parser.error("--fetch-size must be at least 1")
+    window_start, window_end = processing_window(args.date, args.window)
+    rendered_query = render_query(
+        args.stage, args.date, args.query_params, bootstrap=False, window=args.window
+    )
+    if args.print_query:
+        print(rendered_query)
+        return
     if not args.output_uri:
         parser.error("set --output-uri or OUTPUT_URI")
 
@@ -201,16 +268,22 @@ def main() -> None:
     contract = load_contract(ROOT / "contracts" / f"{args.stage}.json")
     bootstrap = args.stage in SCD2_STAGES and open_table(uri) is None
     reader = arrow_stream(
-        render_query(args.stage, args.date, bootstrap=bootstrap),
+        render_query(
+            args.stage, args.date, args.query_params, bootstrap=bootstrap, window=args.window
+        ),
         contract.source_schema,
         args.fetch_size,
     )
     if args.stage in SCD2_STAGES:
         metrics = write_scd2(args.stage, uri, reader, contract)
     else:
-        metrics = write_transactions(uri, args.date, reader, contract)
+        metrics = write_transactions(uri, window_start, window_end, reader, contract)
     print(json.dumps({
-        "business_date": args.date.isoformat(), "stage": args.stage,
+        "business_date": args.date.isoformat(),
+        "window": args.window,
+        "window_start": window_start.isoformat(),
+        "window_end_exclusive": window_end.isoformat(),
+        "stage": args.stage,
         "delta_uri": uri, "total_seconds": round(time.perf_counter() - started, 3),
         "metrics": metrics,
     }, indent=2, default=str))

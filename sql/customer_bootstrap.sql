@@ -7,6 +7,7 @@ with ranked_source as (
         row_number() over (partition by customer_id order by updated_at desc) as row_number
     from analytics.customers
     where updated_at < timestamp '{end_ts}'
+      and ({customer_segment} is null or cast(customer_segment as varchar) = {customer_segment})
 )
 select
     cast(null as varchar) as merge_key,

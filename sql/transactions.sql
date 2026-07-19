@@ -11,6 +11,12 @@ from analytics.transactions t
 inner join published.account a
     on cast(t.account_id as varchar) = a.account_id
    and a.is_current = true
+inner join published.customer c
+    on a.customer_id = c.customer_id
+   and c.is_current = true
 where t.transaction_ts >= timestamp '{start_ts}'
   and t.transaction_ts < timestamp '{end_ts}'
   and t.status = 'posted'
+  and ({customer_segment} is null or c.customer_segment = {customer_segment})
+  and ({account_status} is null or a.account_type = {account_status})
+  and t.amount >= {minimum_transaction_amount}
