@@ -1,0 +1,42 @@
+services:
+  airflow:
+    build:
+      context: .
+      dockerfile: Dockerfile.airflow
+    command: airflow standalone
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      AIRFLOW_HOME: /opt/airflow
+      AIRFLOW__CORE__DAGS_FOLDER: /opt/airflow/dags
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__CORE__DAGBAG_IMPORT_TIMEOUT: "60"
+      HYBRID_PROJECT_DIR: /opt/project
+      PYTHON: /home/airflow/.local/bin/python
+      OUTPUT_URI: ${OUTPUT_URI:-s3://replace-me/hybrid-output}
+      TRINO_HOST: ${TRINO_HOST:-replace-me}
+      TRINO_PORT: ${TRINO_PORT:-443}
+      TRINO_HTTP_SCHEME: ${TRINO_HTTP_SCHEME:-https}
+      TRINO_USER: ${TRINO_USER:-replace-me}
+      TRINO_CATALOG: ${TRINO_CATALOG:-replace-me}
+      TRINO_SCHEMA: ${TRINO_SCHEMA:-replace-me}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
+      AWS_REGION: ${AWS_REGION:-}
+      AWS_ENDPOINT_URL: ${AWS_ENDPOINT_URL:-}
+      DELTA_TARGET_FILE_SIZE: ${DELTA_TARGET_FILE_SIZE:-536870912}
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags:ro
+      - ./:/opt/project
+      - airflow_state:/opt/airflow
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/api/v2/monitor/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 60s
+
+volumes:
+  airflow_state:

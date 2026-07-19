@@ -1,0 +1,32 @@
+version: 2
+
+models:
+  - name: customer
+    description: Customer SCD2 Delta table published by the customer Airflow task.
+    columns:
+      - name: customer_id
+        data_tests: [not_null]
+      - name: valid_from
+        data_tests: [not_null]
+      - name: valid_to
+        data_tests: [not_null]
+      - name: is_current
+        data_tests: [not_null]
+  - name: account
+    description: Account SCD2 Delta table published after customer.
+    columns:
+      - name: account_id
+        data_tests: [not_null]
+      - name: customer_id
+        data_tests: [not_null]
+      - name: is_current
+        data_tests: [not_null]
+  - name: transactions
+    description: Immutable transaction facts replaced idempotently by business-date partition.
+    columns:
+      - name: transaction_id
+        data_tests: [not_null, unique]
+      - name: account_id
+        data_tests: [not_null]
+      - name: business_date
+        data_tests: [not_null]

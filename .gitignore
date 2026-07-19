@@ -1,0 +1,10 @@
+data/
+logs/
+target/
+dbt_packages/
+*.log
+.env
+*.egg-info/
+__pycache__/
+*.py[cod]
+.user.yml

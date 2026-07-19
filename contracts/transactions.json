@@ -1,0 +1,13 @@
+{
+  "business_key": "transaction_id",
+  "partition_by": ["business_date"],
+  "fields": [
+    {"name": "transaction_id", "type": "string", "nullable": false},
+    {"name": "account_id", "type": "string", "nullable": false},
+    {"name": "customer_id", "type": "string", "nullable": false},
+    {"name": "transaction_ts", "type": "timestamp_us", "nullable": false},
+    {"name": "business_date", "type": "date32", "nullable": false},
+    {"name": "amount", "type": "decimal128(18,2)", "nullable": false},
+    {"name": "currency", "type": "string", "nullable": false}
+  ]
+}

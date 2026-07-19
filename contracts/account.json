@@ -1,0 +1,25 @@
+{
+  "business_key": "account_id",
+  "partition_by": ["entity_bucket"],
+  "fields": [
+    {"name": "account_id", "type": "string", "nullable": false},
+    {"name": "customer_id", "type": "string", "nullable": false},
+    {"name": "account_type", "type": "string", "nullable": true},
+    {"name": "valid_from", "type": "timestamp_us", "nullable": false},
+    {"name": "valid_to", "type": "timestamp_us", "nullable": false},
+    {"name": "is_current", "type": "bool", "nullable": false},
+    {"name": "attribute_hash", "type": "string", "nullable": false},
+    {"name": "entity_bucket", "type": "int32", "nullable": false}
+  ],
+  "source_fields": [
+    {"name": "merge_key", "type": "string", "nullable": true},
+    {"name": "account_id", "type": "string", "nullable": false},
+    {"name": "customer_id", "type": "string", "nullable": false},
+    {"name": "account_type", "type": "string", "nullable": true},
+    {"name": "valid_from", "type": "timestamp_us", "nullable": false},
+    {"name": "valid_to", "type": "timestamp_us", "nullable": false},
+    {"name": "is_current", "type": "bool", "nullable": false},
+    {"name": "attribute_hash", "type": "string", "nullable": false},
+    {"name": "entity_bucket", "type": "int32", "nullable": false}
+  ]
+}

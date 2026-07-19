@@ -1,0 +1,14 @@
+name: hybrid_trino_duckdb
+version: "1.0.0"
+config-version: 2
+profile: hybrid_trino_duckdb
+model-paths: ["models"]
+clean-targets: ["target", "dbt_packages"]
+
+vars:
+  output_uri: "file:///tmp/hybrid-output"
+
+models:
+  hybrid_trino_duckdb:
+    published:
+      +materialized: view

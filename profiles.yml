@@ -1,0 +1,13 @@
+hybrid_trino_duckdb:
+  target: dev
+  outputs:
+    dev:
+      type: duckdb
+      path: ":memory:"
+      threads: "{{ env_var('DUCKDB_THREADS', '8') | int }}"
+      extensions: [httpfs, parquet, delta]
+      settings:
+        memory_limit: "{{ env_var('DUCKDB_MEMORY_LIMIT', '8GB') }}"
+        temp_directory: "{{ env_var('DUCKDB_TEMP_DIRECTORY', 'data/tmp') }}"
+        preserve_insertion_order: false
+        enable_external_file_cache: true

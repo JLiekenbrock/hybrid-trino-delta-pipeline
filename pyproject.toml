@@ -1,0 +1,18 @@
+[project]
+name = "hybrid-trino-duckdb"
+version = "0.1.0"
+description = "Streaming read-only Trino to Delta Lake SCD2 pipeline"
+requires-python = ">=3.10"
+dependencies = [
+  "dbt-duckdb>=1.9,<2",
+  "deltalake>=1,<2",
+  "duckdb>=1.4,<2",
+  "pyarrow>=17,<22",
+  "trino>=0.332,<1",
+]
+
+[project.optional-dependencies]
+airflow = ["apache-airflow>=3.3,<4"]
+
+[tool.setuptools]
+packages = []

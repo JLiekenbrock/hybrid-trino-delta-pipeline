@@ -1,0 +1,214 @@
+"""Stream a Trino stage into a schema-enforced Delta Lake transaction."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import time
+from datetime import date, datetime, time as datetime_time, timedelta
+from pathlib import Path
+from typing import Iterator
+
+import pyarrow as pa
+import trino
+from deltalake import DeltaTable, write_deltalake
+from deltalake.exceptions import TableNotFoundError
+
+from contracts import Contract, load_contract
+
+
+ROOT = Path(__file__).resolve().parents[1]
+SCD2_STAGES = {"customer", "account"}
+
+
+def trino_connection():
+    required = ("TRINO_HOST", "TRINO_USER", "TRINO_CATALOG", "TRINO_SCHEMA")
+    missing = [name for name in required if not os.getenv(name)]
+    if missing:
+        raise RuntimeError(f"Missing environment variables: {', '.join(missing)}")
+    return trino.dbapi.connect(
+        host=os.environ["TRINO_HOST"],
+        port=int(os.getenv("TRINO_PORT", "443")),
+        user=os.environ["TRINO_USER"],
+        catalog=os.environ["TRINO_CATALOG"],
+        schema=os.environ["TRINO_SCHEMA"],
+        http_scheme=os.getenv("TRINO_HTTP_SCHEME", "https"),
+    )
+
+
+def render_query(stage: str, day: date, bootstrap: bool = False) -> str:
+    start = datetime.combine(day, datetime_time.min)
+    end = start + timedelta(days=1)
+    suffix = "_bootstrap" if bootstrap else ""
+    return (ROOT / "sql" / f"{stage}{suffix}.sql").read_text(encoding="utf-8").format(
+        business_date=day.isoformat(),
+        start_ts=start.isoformat(sep=" "),
+        end_ts=end.isoformat(sep=" "),
+    )
+
+
+def arrow_stream(sql: str, schema: pa.Schema, fetch_size: int) -> pa.RecordBatchReader:
+    """Lazily convert Trino DBAPI batches using a fixed, non-inferred Arrow schema."""
+    cursor = trino_connection().cursor()
+    cursor.execute(sql)
+    names = [column[0] for column in cursor.description]
+    expected = schema.names
+    if names != expected:
+        cursor.close()
+        raise RuntimeError(f"Trino columns do not match contract. expected={expected}, actual={names}")
+
+    def batches() -> Iterator[pa.RecordBatch]:
+        try:
+            while rows := cursor.fetchmany(fetch_size):
+                records = [dict(zip(names, row)) for row in rows]
+                yield pa.RecordBatch.from_pylist(records, schema=schema)
+        finally:
+            cursor.close()
+
+    return pa.RecordBatchReader.from_batches(schema, batches())
+
+
+def peek(reader: pa.RecordBatchReader) -> tuple[pa.RecordBatch | None, pa.RecordBatchReader]:
+    try:
+        first = reader.read_next_batch()
+    except StopIteration:
+        return None, pa.RecordBatchReader.from_batches(reader.schema, [])
+
+    def batches() -> Iterator[pa.RecordBatch]:
+        yield first
+        yield from reader
+
+    return first, pa.RecordBatchReader.from_batches(reader.schema, batches())
+
+
+def storage_options() -> dict[str, str]:
+    names = (
+        "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN",
+        "AWS_REGION", "AWS_ENDPOINT_URL", "AWS_ALLOW_HTTP",
+    )
+    return {name: os.environ[name] for name in names if os.getenv(name)}
+
+
+def open_table(uri: str) -> DeltaTable | None:
+    try:
+        return DeltaTable(uri, storage_options=storage_options())
+    except TableNotFoundError:
+        return None
+
+
+def target_only_reader(reader: pa.RecordBatchReader, contract: Contract) -> pa.RecordBatchReader:
+    names = contract.target_schema.names
+
+    def batches() -> Iterator[pa.RecordBatch]:
+        for batch in reader:
+            merge_key = batch.column(batch.schema.get_field_index("merge_key"))
+            if merge_key.null_count != len(batch):
+                raise RuntimeError("SCD2 bootstrap input must contain insert rows only")
+            yield batch.select(names)
+
+    return pa.RecordBatchReader.from_batches(contract.target_schema, batches())
+
+
+def write_scd2(stage: str, uri: str, reader: pa.RecordBatchReader, contract: Contract) -> dict:
+    table = open_table(uri)
+    first, reader = peek(reader)
+    if first is None:
+        return {"operation": "noop", "num_source_rows": 0}
+
+    if table is None:
+        # Bootstrap queries must emit insert rows only (merge_key is null).
+        merge_key = first.column(first.schema.get_field_index("merge_key"))
+        if merge_key.null_count != len(first):
+            raise RuntimeError(f"{stage} bootstrap received close rows for a table that does not exist")
+        write_deltalake(
+            uri,
+            target_only_reader(reader, contract),
+            mode="error",
+            partition_by=contract.partition_by,
+            storage_options=storage_options(),
+            target_file_size=int(os.getenv("DELTA_TARGET_FILE_SIZE", str(512 * 1024 * 1024))),
+        )
+        return {"operation": "create"}
+
+    key = contract.business_key
+    insert_values = {name: f"source.{name}" for name in contract.target_schema.names}
+    metrics = (
+        table.merge(
+            source=reader,
+            predicate=(
+                "target.entity_bucket = source.entity_bucket AND target.is_current = true AND ("
+                f"(target.{key} = source.merge_key AND target.attribute_hash <> source.attribute_hash) OR "
+                f"(source.merge_key IS NULL AND target.{key} = source.{key} "
+                "AND target.attribute_hash = source.attribute_hash))"
+            ),
+            source_alias="source",
+            target_alias="target",
+            error_on_type_mismatch=True,
+            streamed_exec=True,
+        )
+        .when_matched_update(
+            predicate="source.merge_key IS NOT NULL",
+            updates={"valid_to": "source.valid_to", "is_current": "false"},
+        )
+        .when_not_matched_insert(
+            predicate="source.merge_key IS NULL",
+            updates=insert_values,
+        )
+        .execute()
+    )
+    return {"operation": "merge", **metrics}
+
+
+def write_transactions(uri: str, day: date, reader: pa.RecordBatchReader, contract: Contract) -> dict:
+    table = open_table(uri)
+    first, reader = peek(reader)
+    predicate = f"business_date = '{day.isoformat()}'"
+    if first is None:
+        metrics = table.delete(predicate=predicate) if table else {}
+        return {"operation": "delete_empty_partition", **metrics}
+
+    write_deltalake(
+        table or uri,
+        reader,
+        mode="overwrite" if table else "error",
+        partition_by=contract.partition_by if table is None else None,
+        predicate=predicate if table else None,
+        storage_options=storage_options(),
+        target_file_size=int(os.getenv("DELTA_TARGET_FILE_SIZE", str(512 * 1024 * 1024))),
+    )
+    return {"operation": "replace_partition", "partition_predicate": predicate}
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--date", required=True, type=date.fromisoformat)
+    parser.add_argument("--stage", required=True, choices=("customer", "account", "transactions"))
+    parser.add_argument("--output-uri", default=os.getenv("OUTPUT_URI"))
+    parser.add_argument("--fetch-size", type=int, default=100_000)
+    args = parser.parse_args()
+    if not args.output_uri:
+        parser.error("set --output-uri or OUTPUT_URI")
+
+    started = time.perf_counter()
+    uri = f"{args.output_uri.rstrip('/')}/{args.stage}"
+    contract = load_contract(ROOT / "contracts" / f"{args.stage}.json")
+    bootstrap = args.stage in SCD2_STAGES and open_table(uri) is None
+    reader = arrow_stream(
+        render_query(args.stage, args.date, bootstrap=bootstrap),
+        contract.source_schema,
+        args.fetch_size,
+    )
+    if args.stage in SCD2_STAGES:
+        metrics = write_scd2(args.stage, uri, reader, contract)
+    else:
+        metrics = write_transactions(uri, args.date, reader, contract)
+    print(json.dumps({
+        "business_date": args.date.isoformat(), "stage": args.stage,
+        "delta_uri": uri, "total_seconds": round(time.perf_counter() - started, 3),
+        "metrics": metrics,
+    }, indent=2, default=str))
+
+
+if __name__ == "__main__":
+    main()
